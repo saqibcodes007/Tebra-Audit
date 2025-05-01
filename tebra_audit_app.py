@@ -1,7 +1,11 @@
-# -----------------------------------------------------------------------------
-# Streamlit App for Tebra Audit - Pediatrics West Version (vID Match)
-# -----------------------------------------------------------------------------
+# -*- coding: utf-8 -*-
+"""
+Streamlit App for Tebra Audit v2 (Corrected Syntax Error)
+"""
 
+# -----------------------------------------------------------------------------
+# PART 1: Dependencies
+# -----------------------------------------------------------------------------
 import streamlit as st
 import pandas as pd
 import zeep
@@ -9,398 +13,400 @@ import zeep.helpers
 from zeep.exceptions import Fault as SoapFault
 from requests import Session
 from zeep.transports import Transport
-import datetime
+import datetime # Import the module
 import time
 import re
-from collections import defaultdict
+from decimal import Decimal, ROUND_HALF_UP
 import io
+import base64 # For download link
 
 # -----------------------------------------------------------------------------
-# PART 1: Core Logic (Utilities, API Calls - Mostly Unchanged)
+# PART 5: Utility Functions
 # -----------------------------------------------------------------------------
+# (These functions remain the same as the final working version in Colab,
+#  except for the corrected normalize_dob)
 
-# --- Utility Functions ---
-# [Keep all utility functions: normalize_code, split_codes, normalize_string,
-#  normalize_policy_number, compare_providers, validate_codes, format_audit_reasons]
+print("--- Defining Utility Functions (Part 5 - Corrected normalize_dob) ---") # Keep print for debugging module load
+
+def normalize_string(text, remove_spaces=False):
+  if isinstance(text, str): text = text.lower().strip(); text = re.sub(r'[.,()-]', '', text);
+  if remove_spaces: text = re.sub(r'\s+', '', text)
+  else: text = ' '.join(text.split())
+  return text; return text
 def normalize_code(code):
-    if not code: return ''
-    code = str(code).upper().strip()
-    code = re.sub(r'[^A-Z0-9]', '', code)
-    if code.startswith('ICD'): code = code[3:]
-    elif code.startswith('CPT'): code = code[3:]
-    if code.endswith('F'): code = code[:-1] + 'F'
-    return code
-def split_codes(code_str):
-    if not code_str: return []
-    return [normalize_code(c) for c in str(code_str).split(",") if c.strip()]
-def normalize_string(value):
-    if not value: return ''
-    value = str(value)
-    value = re.sub(r'[^a-zA-Z0-9]', ' ', value)
-    return ' '.join(value.lower().split())
-def normalize_policy_number(number):
-    if not number: return ''
-    number = str(number)
-    number = re.sub(r'[^A-Z0-9]', '', number.upper())
-    return number.lstrip('0')
-def compare_providers(tebra_provider, excel_provider):
-    if not tebra_provider or not excel_provider: return False
-    tebra_norm = normalize_string(tebra_provider)
-    excel_norm = normalize_string(excel_provider)
-    if (tebra_norm == excel_norm or tebra_norm in excel_norm or excel_norm in tebra_norm): return True
-    tebra_last = tebra_norm.split(',')[0].strip()
-    excel_last = excel_norm.split(',')[0].strip()
-    return tebra_last == excel_last
-def validate_codes(codes, code_type):
-    valid_codes = []
-    for code in codes:
-        if not code: continue
-        if code_type == 'ICD':
-            if (len(code) >= 3 and len(code) <= 7 and code[0].isalpha() and code[1:].isalnum()): valid_codes.append(code)
-        elif code_type == 'CPT':
-            if len(code) == 5 and code[:4].isdigit() and (code[4].isalpha() or not code[4].isdigit()): valid_codes.append(code)
-            elif len(code) == 5 and code[0].isalpha() and code[1:].isdigit(): valid_codes.append(code)
-            elif code.endswith('F') and code[:-1].isdigit(): valid_codes.append(code)
-    return valid_codes
-def format_audit_reasons(reasons): # Used for Excel Summary
-    if not reasons: return ''
-    reason_counts = defaultdict(int)
-    for reason in reasons: reason_counts[reason] += 1
-    formatted = []
-    for reason, count in reason_counts.items():
-        if count > 1: formatted.append(f"{reason} ({count}x)")
-        else: formatted.append(reason)
-    return ' | '.join(formatted)
+  if isinstance(code, str): return re.sub(r'[^a-zA-Z0-9]', '', code).upper()
+  elif isinstance(code, (int, float)): return str(int(code))
+  return code
+def normalize_name(name):
+    if isinstance(name, str): name = re.sub(r'[,.\s]*(md|do|rn|np|pa|pcp|facp|dpm|lcsw|lpcc|rnfa|fnp|aprn)[\s.]*$', '', name.strip(), flags=re.IGNORECASE | re.DOTALL); name = name.lower(); name = re.sub(r'(?<![-’\'])[,."](?![-’\'])', '', name); name = ' '.join(name.split()); return name
+    return name
+def compare_names(excel_name, tebra_name):
+    norm_excel = normalize_name(excel_name); norm_tebra = normalize_name(tebra_name);
+    if not norm_excel or not norm_tebra: return not norm_excel and not norm_tebra
+    parts_excel = norm_excel.split(); parts_tebra = norm_tebra.split();
+    if not parts_excel or not parts_tebra: return False
+    first_name_match = (parts_excel[0] == parts_tebra[0]); last_name_match = (parts_excel[-1] == parts_tebra[-1])
+    return first_name_match and last_name_match
 
-# --- Tebra API Interaction Functions ---
-# [Keep create_api_client, build_request_header, search_tebra_patient,
-#  get_tebra_patient_details, get_patient_codes_and_providers_from_charges]
-@st.cache_resource
-def create_api_client(wsdl_url):
-    st.info("🔌 Connecting to Tebra SOAP API...")
+# *** CORRECTED normalize_dob function ***
+def normalize_dob(date_input):
+    """
+    Attempts to parse a date string or datetime object into YYYY-MM-DD format.
+    Handles MM/DD/YYYY and YYYY-MM-DD string inputs.
+    """
+    if date_input is None:
+        return None
+
+    date_str = None
+    # Check if input is datetime.datetime object
+    if isinstance(date_input, datetime.datetime):
+        try:
+            return date_input.strftime('%Y-%m-%d')
+        except ValueError:
+             # st.warning(f"Could not format datetime object {date_input}.") # Optional UI warning
+             return None
+    # Check if input is already a string
+    elif isinstance(date_input, str):
+        date_str = date_input.strip()
+    # Try converting other types to string
+    else:
+        try:
+            date_str = str(date_input).strip()
+        except Exception:
+            # st.warning(f"Could not convert date input '{date_input}' to string.") # Optional UI warning
+            return None
+
+    # *** Check if date_str became empty AFTER potential conversion/stripping ***
+    if not date_str:
+        return None
+
+    # At this point, date_str should be a non-empty string
+    # Clean up potential time part
     try:
-        session = Session(); session.timeout = 60
-        transport = Transport(session=session, timeout=60)
+        date_part = date_str.split()[0]
+    except IndexError:
+        # st.warning(f"Could not extract date part from '{date_str}'.") # Optional UI warning
+        return None
+    except AttributeError: # Should not happen if not date_str check above worked
+        return None
+
+    # Try parsing known formats
+    try:
+        dt = datetime.datetime.strptime(date_part, '%m/%d/%Y')
+        return dt.strftime('%Y-%m-%d')
+    except ValueError:
+        try:
+            dt = datetime.datetime.strptime(date_part, '%Y-%m-%d')
+            return dt.strftime('%Y-%m-%d')
+        except ValueError:
+            # st.warning(f"Could not parse date string '{date_part}' using known formats.") # Optional UI warning
+            return None
+# *** End of corrected normalize_dob ***
+
+def compare_dob(excel_dob_input, tebra_dob_str):
+    norm_excel = normalize_dob(excel_dob_input); norm_tebra = normalize_dob(tebra_dob_str)
+    if not norm_excel or not norm_tebra: return False if norm_excel or norm_tebra else True
+    return norm_excel == norm_tebra
+def get_nested_attribute(obj, attribute_path, default=None):
+    current = obj;
+    try:
+        for attr in attribute_path.split('.'):
+            if current is None: return default
+            current = getattr(current, attr, None)
+        return current if current is not None else default
+    except AttributeError: return default
+def round_half_up(n, decimals=2):
+    if n is None: return None
+    try: number = Decimal(str(n))
+    except (decimal.InvalidOperation, ValueError, TypeError): return None
+    quantizer = Decimal('1e-' + str(decimals)); return number.quantize(quantizer, rounding=ROUND_HALF_UP)
+def compare_providers(excel_provider, tebra_provider): return compare_names(excel_provider, tebra_provider)
+def compare_pos_codes(excel_pos, tebra_pos):
+    norm_excel = normalize_string(excel_pos, remove_spaces=True); norm_tebra = normalize_string(str(tebra_pos), remove_spaces=True)
+    if not norm_excel or not norm_tebra: return not norm_excel and not norm_tebra
+    if norm_excel == 'office' and norm_tebra == '11': return True
+    if ('telehealth' in norm_excel and 'home' in norm_excel) and norm_tebra == '10': return True
+    if norm_excel == norm_tebra: return True; return False
+def compare_ins_plans(excel_plan, tebra_plan): # Assuming this custom logic is desired now
+    norm_excel = normalize_string(excel_plan, remove_spaces=True); norm_tebra = normalize_string(tebra_plan, remove_spaces=True)
+    if not norm_excel or not norm_tebra: return not norm_excel and not norm_tebra
+    excel_is_bcbs = norm_excel == 'bcbs'; tebra_is_bluecross = 'bluecross' in norm_tebra or 'bcbs' in norm_tebra
+    if excel_is_bcbs and tebra_is_bluecross: return True
+    if tebra_is_bluecross and ('bluecross' in norm_excel or 'bcbs' in norm_excel): return True
+    if norm_excel == norm_tebra: return True; return False
+def format_mismatch_reason(field, excel_val, tebra_val, identifier=None):
+  excel_str = str(excel_val) if excel_val is not None else 'NULL'; tebra_str = str(tebra_val) if tebra_val is not None else 'NULL'
+  reason = f"{field} Mismatch (Excel: '{excel_str}', Tebra: '{tebra_str}')"
+  if identifier: reason += f" for Claim ID {identifier}"
+  return reason
+# --- End of Part 5 Functions ---
+
+# -----------------------------------------------------------------------------
+# PART 2 & 6 Functions (Adapted for Streamlit where needed)
+# -----------------------------------------------------------------------------
+
+@st.cache_resource(ttl=3600)
+def create_api_client(wsdl_url="https://webservice.kareo.com/services/soap/2.1/KareoServices.svc?singleWsdl"):
+    st.write("🔌 Connecting to Tebra SOAP API...")
+    try:
+        session = Session(); session.timeout = 120; transport = Transport(session=session, timeout=120)
         client = zeep.Client(wsdl=wsdl_url, transport=transport)
-        st.success("✅ Connected to Tebra API.")
+        st.write("✅ Connected to Tebra API.")
         return client
     except Exception as e: st.error(f"❌ Failed to connect to Tebra API: {e}"); return None
+
 def build_request_header(credentials, client):
+    if not client: st.error("❌ Cannot build header without API client."); return None
     try:
         header_type = client.get_type('ns0:RequestHeader')
-        password = credentials['Password'].replace('&', '&amp;').replace('<', '&lt;').replace('>', '&gt;').replace('"', '&quot;').replace("'", '&apos;')
-        return header_type(CustomerKey=credentials['CustomerKey'], User=credentials['User'], Password=password)
-    except Exception as e: st.error(f"Error building request header: {e}"); return None
-@st.cache_data(ttl=300)
-def search_tebra_patient(_client, _header, practice_details, patient_name):
-    # st.write(f"   (API Call: Searching Tebra for: {patient_name})")
-    try:
-        filter_type = _client.get_type('ns0:PatientFilter'); patient_filter = filter_type(PracticeName=practice_details['PracticeName'], FullName=patient_name)
-        fields_type = _client.get_type('ns0:PatientFieldsToReturn'); fields = fields_type(ID=True, DOB=True, PracticeName=True)
-        request_type = _client.get_type('ns0:GetPatientsReq'); request = request_type(RequestHeader=_header, Filter=patient_filter, Fields=fields)
-        response = _client.service.GetPatients(request=request); time.sleep(0.5)
-        if not response or not response.Patients or not response.Patients.PatientData: return None
-        patient_data = response.Patients.PatientData; patient = zeep.helpers.serialize_object(patient_data[0] if isinstance(patient_data, list) else patient_data, dict)
-        return patient
-    except SoapFault as soap_error: st.error(f"❌ SOAP Error during patient search ({patient_name}): {soap_error.message}"); return None
-    except Exception as e: st.error(f"❌ Error during patient search ({patient_name}): {e}"); return None
-@st.cache_data(ttl=300)
-def get_tebra_patient_details(_client, _header, patient_id):
-    # st.write(f"   (API Call: Fetching details for Patient ID: {patient_id})")
-    try:
-        request_type = _client.get_type('ns0:GetPatientReq'); filter_type = client.get_type('ns0:SinglePatientFilter'); patient_filter = filter_type(PatientID=patient_id)
-        request = request_type(RequestHeader=_header, Filter=patient_filter)
-        response = _client.service.GetPatient(request=request); time.sleep(0.25)
-        if not response or not response.Patient: return None
-        patient_details = zeep.helpers.serialize_object(response.Patient, dict)
-        return patient_details
-    except SoapFault as soap_error: st.error(f"❌ SOAP Error fetching details for Patient ID {patient_id}: {soap_error.message}"); return None
-    except Exception as e: st.error(f"❌ Error in GetPatient for ID {patient_id}: {e}"); return None
-@st.cache_data(ttl=300)
-def get_patient_codes_and_providers_from_charges(_client, _header, patient_name, practice_name, dos):
-    # st.write(f"   (API Call: Fetching charges for {patient_name} on {dos})")
-    all_codes = []; all_providers = set()
-    try:
-        dos_date = pd.to_datetime(dos).strftime('%m/%d/%Y') if dos else None
-        if not dos_date: return [], set()
-        filter_type = _client.get_type('ns0:ChargeFilter'); request_type = client.get_type('ns0:GetChargesReq')
-        charge_filter = filter_type( PracticeName=practice_name, PatientName=patient_name, FromServiceDate=dos_date, ToServiceDate=dos_date, IncludeUnapprovedCharges='true')
-        response = _client.service.GetCharges(request=request_type(RequestHeader=_header, Filter=charge_filter)); time.sleep(0.5)
-        if response and response.Charges and response.Charges.ChargeData:
-            charges = response.Charges.ChargeData; charges = [charges] if not isinstance(charges, list) else charges
-            for charge in charges:
-                charge_dict = zeep.helpers.serialize_object(charge)
-                icd_fields = ['EncounterDiagnosisID1','EncounterDiagnosisID2','EncounterDiagnosisID3','EncounterDiagnosisID4','DiagnosisCode1','DiagnosisCode2','PrimaryDiagnosisCode','SecondaryDiagnosisCode']
-                cpt_fields = ['ProcedureCode', 'CPTCode', 'ServiceCode']
-                for field in icd_fields:
-                    if field in charge_dict and charge_dict[field]: all_codes.append({'type': 'ICD', 'code': normalize_code(charge_dict[field])})
-                for field in cpt_fields:
-                     if field in charge_dict and charge_dict[field]: all_codes.append({'type': 'CPT', 'code': normalize_code(charge_dict[field])})
-                if 'DiagnosisCodes' in charge_dict and charge_dict['DiagnosisCodes']:
-                    diags = charge_dict['DiagnosisCodes']
-                    if isinstance(diags, dict) and 'ChargeDiagnosisCodeData' in diags:
-                         diag_data = diags['ChargeDiagnosisCodeData']; diag_data = [diag_data] if not isinstance(diag_data, list) else diag_data
-                         for d in diag_data:
-                             d_dict = zeep.helpers.serialize_object(d);
-                             if 'Code' in d_dict and d_dict['Code']: all_codes.append({'type': 'ICD', 'code': normalize_code(d_dict['Code'])})
-                provider_fields = ['RenderingProviderName','SchedulingProviderName','SupervisingProviderName','ReferringProviderName']
-                for field in provider_fields:
-                    if field in charge_dict and charge_dict[field]: all_providers.add(str(charge_dict[field]).strip())
-    except SoapFault as soap_error: st.error(f"❌ SOAP Error fetching charges for {patient_name} on {dos}: {soap_error.message}")
-    except Exception as e: st.error(f"❌ Error fetching charges for {patient_name} on {dos}: {str(e)}")
-    seen = set(); unique_codes = []
-    for code in all_codes:
-        code_key = (code['type'], code['code'])
-        if code_key not in seen and code['code']: seen.add(code_key); unique_codes.append(code)
-    return unique_codes, all_providers
+        return header_type(CustomerKey=credentials['CustomerKey'], User=credentials['User'], Password=credentials['Password'])
+    except Exception as e: st.error(f"❌ Error building request header: {e}"); return None
 
-# --- REMOVED compare_insurance_data function ---
-# We will implement the ID check directly in the loop
+def get_tebra_patient_soap(client, header, patient_id):
+    soap_method_name = "GetPatient"; request_type_name = '{http://www.kareo.com/api/schemas/}GetPatientReq'; filter_type_name = '{http://www.kareo.com/api/schemas/}SinglePatientFilter'
+    try: patient_id_int = int(patient_id)
+    except (ValueError, TypeError): return None, f"Invalid Patient ID format: '{patient_id}'."
+    try:
+        SinglePatientFilter_Type = client.get_type(filter_type_name); GetPatientReq_Type = client.get_type(request_type_name)
+        filter_object = SinglePatientFilter_Type(PatientID=patient_id_int); patient_request_object = GetPatientReq_Type(RequestHeader=header, Filter=filter_object)
+        response = client.service.GetPatient(request=patient_request_object)
+        if hasattr(response, 'ErrorResponse') and response.ErrorResponse.IsError: error_msg = get_nested_attribute(response, 'ErrorResponse.ErrorMessage', 'Unknown API error'); return None, f"API Error ({soap_method_name}): {error_msg}"
+        if not hasattr(response, 'Patient') or not response.Patient: return None, f"Patient data object not found in response for ID {patient_id_int}."
+        return response, None
+    except zeep.exceptions.Fault as fault: return None, f"SOAP Fault ({soap_method_name} {patient_id_int}): {fault.message}"
+    except (TypeError, AttributeError, ValueError, zeep.exceptions.Error) as e: return None, f"Zeep/Request Error ({soap_method_name} {patient_id_int}): {type(e).__name__} - {e}"
+    except Exception as e: return None, f"Unexpected Error ({soap_method_name} {patient_id_int}): {type(e).__name__} - {e}"
+
+def get_tebra_charges_soap(client, header, patient_name, dos_datetime):
+    soap_method_name = "GetCharges"; request_type_name = '{http://www.kareo.com/api/schemas/}GetChargesReq'; filter_type_name = '{http://www.kareo.com/api/schemas/}ChargeFilter'
+    try: dos_str = dos_datetime.strftime('%Y-%m-%d')
+    except (AttributeError) as e: return [], f"Invalid DOS input for GetCharges: '{dos_datetime}'. Error: {e}"
+    if not patient_name: return [], "Cannot fetch charges without a valid patient name."
+    try:
+        ChargeFilter_Type = client.get_type(filter_type_name); GetChargesReq_Type = client.get_type(request_type_name)
+        charge_filter_object = ChargeFilter_Type(PatientName=patient_name, FromServiceDate=dos_str, ToServiceDate=dos_str)
+        charge_request_object = GetChargesReq_Type(RequestHeader=header, Filter=charge_filter_object)
+        response = client.service.GetCharges(request=charge_request_object)
+        if hasattr(response, 'ErrorResponse') and response.ErrorResponse.IsError: error_msg = get_nested_attribute(response, 'ErrorResponse.ErrorMessage', 'Unknown API error'); return [], f"API Error ({soap_method_name}): {error_msg}"
+        charges_data_container = get_nested_attribute(response, 'Charges.ChargeData', default=[]);
+        if charges_data_container is None: charges_list = []
+        elif not isinstance(charges_data_container, list): charges_list = [charges_data_container]
+        else: charges_list = charges_data_container
+        return charges_list, None
+    except zeep.exceptions.Fault as fault: return [], f"SOAP Fault ({soap_method_name} '{patient_name}', {dos_str}): {fault.message}"
+    except (TypeError, AttributeError, ValueError, zeep.exceptions.Error) as e: return [], f"Zeep/Request Error ({soap_method_name} '{patient_name}', {dos_str}): {type(e).__name__} - {e}"
+    except Exception as e: return [], f"Unexpected Error ({soap_method_name} '{patient_name}', {dos_str}): {type(e).__name__} - {e}"
+
+def find_matching_charge(excel_row_data, tebra_charges_list):
+    excel_claim_id = None
+    try:
+        if isinstance(excel_row_data, pd.Series):
+            excel_cpt = normalize_code(excel_row_data.get('ProcedureCode')); excel_charge = round_half_up(excel_row_data.get('ServiceChargeAmount'), decimals=2); excel_claim_id = str(excel_row_data.get('claimID', 'UNKNOWN'))
+        else:
+             excel_cpt = normalize_code(excel_row_data.get('ProcedureCode')); excel_charge = round_half_up(excel_row_data.get('ServiceChargeAmount'), decimals=2); excel_claim_id = str(excel_row_data.get('claimID', 'UNKNOWN'))
+        potential_matches = []
+        for tebra_charge in tebra_charges_list:
+            tebra_cpt = normalize_code(get_nested_attribute(tebra_charge, 'ProcedureCode'))
+            if excel_cpt == tebra_cpt: potential_matches.append(tebra_charge)
+        if not potential_matches: return None, f"CPT Mismatch (Excel CPT: {excel_cpt} not found in Tebra charges for Claim ID {excel_claim_id})"
+        for tebra_charge in potential_matches:
+            tebra_charge_amt = round_half_up(get_nested_attribute(tebra_charge, 'TotalCharges'), decimals=2)
+            if excel_charge is not None and tebra_charge_amt is not None and excel_charge == tebra_charge_amt: return tebra_charge, None
+        first_potential_tebra_amt = round_half_up(get_nested_attribute(potential_matches[0], 'TotalCharges'), decimals=2) if potential_matches else 'N/A'
+        return None, f"Amount Mismatch (Excel: {excel_charge}, Tebra: {first_potential_tebra_amt} for Claim ID {excel_claim_id})"
+    except Exception as e:
+        claim_id_str = excel_claim_id if excel_claim_id is not None else 'UNKNOWN'
+        return None, f"Code error in find_matching_charge for Claim ID {claim_id_str}: {e}"
+# --- End of Part 6 Functions ---
 
 # -----------------------------------------------------------------------------
-# PART 2: Streamlit UI Setup
+# Streamlit App Main Section
 # -----------------------------------------------------------------------------
+
 st.set_page_config(layout="wide")
-st.title("🩺 Tebra Audit Tool for Pediatrics West")
-st.subheader("By Panacea Smart Solutions")
+st.title("Tebra Audit Automation Tool")
+st.markdown("Upload your Excel audit file and enter Tebra credentials to run the audit.")
 
-# --- Input Section (Sidebar) ---
-st.sidebar.header("Configuration")
-st.sidebar.subheader("🔑 Tebra API Credentials")
-practice_name = st.sidebar.text_input("Practice Name", key="practice_name")
-customer_key = st.sidebar.text_input("Customer Key", type="password", key="customer_key")
-user = st.sidebar.text_input("Username (email)", key="user")
-password = st.sidebar.text_input("Password", type="password", key="password")
-st.sidebar.subheader("📄 Upload Audit File")
-uploaded_file = st.sidebar.file_uploader("Upload Excel (.xlsx) or CSV (.csv) file", type=['xlsx', 'csv'], key="uploader")
+# --- Input Area ---
+with st.sidebar:
+    st.header("Tebra Credentials")
+    practice_name = st.text_input("Practice Name", key="practice_name")
+    customer_key = st.text_input("Customer Key", type="password", key="customer_key")
+    username = st.text_input("Username (email)", key="username")
+    password = st.text_input("Password", type="password", key="password")
 
-# -----------------------------------------------------------------------------
-# PART 3: Main Audit Logic & UI Display (Implementing ID Match Logic)
-# -----------------------------------------------------------------------------
-if st.sidebar.button("🚀 Run Audit", key="run_button"):
-    if not all([practice_name, customer_key, user, password]):
-        st.warning("🚨 Please enter all Tebra API credentials.")
-    elif uploaded_file is None:
-        st.warning("🚨 Please upload the audit file.")
+    st.header("Upload Audit File")
+    uploaded_file = st.file_uploader("Choose an Excel file (.xlsx)", type=["xlsx"])
+
+run_button = st.button("Run Audit")
+
+# --- Processing and Output Area ---
+if run_button and uploaded_file:
+    if not all([practice_name, customer_key, username, password]): st.error("❌ Please enter all Tebra credentials.")
     else:
-        st.info("⏳ Audit process started...")
-        df = None
-        try: # Read Excel/CSV
-            file_name = uploaded_file.name
-            if file_name.lower().endswith('.csv'): df = pd.read_csv(uploaded_file, dtype=str)
-            elif file_name.lower().endswith('.xlsx'): df = pd.read_excel(uploaded_file, dtype=str)
+        st.info("🚀 Starting Audit Process...")
+        with st.spinner('Connecting to Tebra API...'):
+            client = create_api_client()
+            if client: credentials = {"CustomerKey": customer_key, "User": username, "Password": password}; header = build_request_header(credentials, client)
+            else: header = None
+        if not client or not header: st.error("❌ Tebra connection failed."); st.stop()
+        st.success("✅ Connected to Tebra.")
+
+        try:
+            st.info(f"Reading Excel file: {uploaded_file.name}")
+            df = pd.read_excel(uploaded_file, dtype={'PatientID': str, 'claimID': str, 'EncounterID': str}, engine='openpyxl', keep_default_na=False) # Ensure IDs read as string
             df = df.fillna('')
-            st.success(f"✅ Successfully read '{file_name}' with {len(df)} rows.")
-        except Exception as e: st.error(f"❌ Error reading file: {e}"); st.stop()
+            df.reset_index(inplace=True); df.rename(columns={'index': 'Original Excel Row Index'}, inplace=True)
+            st.success(f"✅ Read {len(df)} rows from Excel file.")
+        except Exception as e: st.error(f"❌ Error reading Excel file: {e}"); st.stop()
 
-        # Column Mapping & Verification
-        mapping = { 'patient_name': 'Patient Name', 'dob': 'Patient DOB', 'policy_number': 'Patient Policy Num', 'group_number': 'Patient Group Num', 'insurance_company': 'Insurance Name', 'provider': 'Provider Name', 'encounter_id': 'Encounter ID', 'claim_id': 'Claim ID', 'dos': 'Date Of Service', 'icd': 'Diagnosis Code', 'icd2': 'Diagnosis Code2', 'cpt': 'Procedure Code', 'location': 'Location Name' }
-        missing_columns = [col for col in mapping.values() if col not in df.columns]
-        if missing_columns: st.error(f"❌ Missing required columns: {', '.join(missing_columns)}"); st.stop()
-        else: st.info("✅ All required columns found in the uploaded file.")
+        # Simplified column check
+        required_cols_list = ['PatientID', 'PatientName', 'DOB', 'DateOfService', 'RenderingProvider','ReferringProvider', 'PlaceOfServiceCode', 'ProcedureCode','ProcedureModifier1', 'ProcedureModifier2', 'ProcedureModifier3', 'ProcedureModifier4','ServiceUnitCount', 'EncounterDiagnosisID1', 'EncounterDiagnosisID2','EncounterDiagnosisID3', 'EncounterDiagnosisID4', 'ServiceChargeAmount','PriIns_CompanyName', 'PriIns_CompanyPlanName', 'EncounterID', 'claimID']
+        if not all(col in df.columns for col in required_cols_list):
+             st.error("❌ Error: One or more required columns are missing. Check file headers."); st.stop()
+        else: st.success("✅ Required Excel columns verified.")
 
-        # Prepare DataFrame
-        patient_columns = [ mapping['patient_name'], mapping['dob'], mapping['policy_number'], mapping['group_number'], mapping['insurance_company'], mapping['provider'], mapping['encounter_id'], mapping['dos'] ]
-        ffillable_cols = [col for col in patient_columns if col in df.columns]
-        df[ffillable_cols] = df[ffillable_cols].ffill()
-        df.reset_index(drop=True, inplace=True)
+        tebra_patient_cache = {}; tebra_charges_cache = {}; audit_results_list = []
+        total_rows = len(df); progress_bar = st.progress(0); status_text = st.empty()
 
-        # API Client Setup
-        TEBRA_WSDL_URL = "https://webservice.kareo.com/services/soap/2.1/KareoServices.svc?singleWsdl"
-        client = create_api_client(TEBRA_WSDL_URL)
+        st.info("⏳ Running comparisons against Tebra data...")
+        start_time = time.time()
 
-        if client:
-            credentials = {"CustomerKey": customer_key, "User": user, "Password": password}
-            practice_details = {"PracticeName": practice_name}
-            header = build_request_header(credentials, client)
+        for index, row in df.iterrows():
+            excel_row_num_display = index + 2
+            percent_complete = (index + 1) / total_rows; progress_bar.progress(min(1.0, percent_complete)); status_text.text(f"Processing Excel row {excel_row_num_display}/{total_rows+1}...")
+            current_result_data = {"Excel Row": excel_row_num_display, "Status": "Error", "Reason": "Processing started", "Excel Data": row.to_dict()}
+            mismatch_reasons = []; excel_patient_id_str = None; excel_claim_id = None
 
-            if header:
-                st.info("🕵️ Starting data audit...")
-                audit_results_detailed_text = []
-                audit_df = df.copy()
-                audit_df['Audit Results'] = 'Pending'
-                audit_df['Reason For Invalid'] = ''
+            # 1. Extract Data
+            try:
+                excel_patient_id_str = str(row.get('PatientID', '')).strip(); excel_claim_id = str(row.get('claimID', 'UNKNOWN'))
+                if not excel_patient_id_str: raise ValueError("Missing PatientID")
+                current_result_data["Excel PatientID"] = excel_patient_id_str; current_result_data["Excel claimID"] = excel_claim_id
+                excel_patient_name_raw = row.get('PatientName'); excel_dob_raw = row.get('DOB'); excel_dos_raw = row.get('DateOfService')
+                if pd.isna(excel_dos_raw): raise ValueError("Missing DateOfService")
+                try: excel_dos_dt = excel_dos_raw if isinstance(excel_dos_raw, datetime.datetime) else pd.to_datetime(excel_dos_raw).to_pydatetime()
+                except Exception as date_err: raise ValueError(f"Invalid DateOfService format '{excel_dos_raw}': {date_err}") from date_err
+                excel_dos_str = excel_dos_dt.strftime('%Y-%m-%d')
+                current_result_data["Excel DOS"] = excel_dos_str; current_result_data["Excel ProcCode"] = row.get('ProcedureCode')
+            except Exception as e: current_result_data["Reason"] = f"Error reading Excel data: {e}"; audit_results_list.append(current_result_data); continue
 
-                progress_bar = st.progress(0)
-                total_rows = len(audit_df)
-                tebra_data_cache = {}
+            # 2. Get Patient
+            tebra_patient_response, api_error_pat = tebra_patient_cache.get(excel_patient_id_str, (None, None))
+            if tebra_patient_response is None and api_error_pat is None: tebra_patient_response, api_error_pat = get_tebra_patient_soap(client, header, excel_patient_id_str); tebra_patient_cache[excel_patient_id_str] = (tebra_patient_response, api_error_pat)
 
-                # --- Main Audit Loop ---
-                for idx, row in audit_df.iterrows():
-                    progress_text = f"Processing row {idx+1} of {total_rows}..."; progress_bar.progress((idx + 1) / total_rows, text=progress_text)
-                    # Extract data
-                    patient_name=str(row.get(mapping['patient_name'], '')).strip()
-                    dob=str(row.get(mapping['dob'], '')).strip()
-                    policy_num=str(row.get(mapping['policy_number'], '')).strip()
-                    excel_insurance=str(row.get(mapping['insurance_company'], '')).strip()
-                    excel_provider=str(row.get(mapping['provider'], '')).strip()
-                    dos=str(row.get(mapping['dos'], '')).strip()
-                    claim_id=str(row.get(mapping['claim_id'], '')).strip()
-                    excel_icd_raw=str(row.get(mapping['icd'], '')).strip()
-                    excel_icd2_raw=str(row.get(mapping['icd2'], '')).strip()
-                    combined_excel_icd=excel_icd_raw + (f",{excel_icd2_raw}" if excel_icd_raw and excel_icd2_raw else excel_icd2_raw)
-                    excel_cpt_raw=str(row.get(mapping['cpt'], '')).strip()
+            # 3. Process Patient
+            tebra_patient_name_for_filter = None
+            if api_error_pat: mismatch_reasons.append(f"Patient Fetch Error: {api_error_pat}"); current_result_data["Status"] = "Error"
+            elif not tebra_patient_response or not hasattr(tebra_patient_response, 'Patient') or not tebra_patient_response.Patient: mismatch_reasons.append(f"No valid Tebra patient data for ID {excel_patient_id_str}."); current_result_data["Status"] = "Error"
+            else:
+                try:
+                    tebra_patient_data = tebra_patient_response.Patient; tebra_patient_name_for_filter = get_nested_attribute(tebra_patient_data, 'PatientFullName'); tebra_first_name = get_nested_attribute(tebra_patient_data, 'FirstName'); tebra_last_name = get_nested_attribute(tebra_patient_data, 'LastName'); tebra_dob_str = get_nested_attribute(tebra_patient_data, 'DOB')
+                    if not tebra_patient_name_for_filter and tebra_first_name and tebra_last_name: tebra_patient_name_for_filter = f"{tebra_first_name} {tebra_last_name}"
+                    tebra_name_for_compare = tebra_patient_name_for_filter if tebra_patient_name_for_filter else "MISSING_NAME"
+                    excel_name_parts = [p.strip() for p in str(excel_patient_name_raw).split(',')] if excel_patient_name_raw else []; excel_name_normalized = f"{excel_name_parts[1]} {excel_name_parts[0]}" if len(excel_name_parts)==2 else excel_patient_name_raw
+                    if not compare_names(excel_name_normalized, tebra_name_for_compare): mismatch_reasons.append(format_mismatch_reason("Patient Name", excel_patient_name_raw, tebra_name_for_compare))
+                    if not compare_dob(excel_dob_raw, tebra_dob_str): mismatch_reasons.append(format_mismatch_reason("Patient DOB", excel_dob_raw, tebra_dob_str))
+                    if not mismatch_reasons: current_result_data["Status"] = "Pending"
+                except Exception as e: mismatch_reasons.append(f"Error processing Tebra patient data: {e}"); current_result_data["Status"] = "Error"
 
-                    # *** NEW: Extract Company ID from Excel Insurance Name ***
-                    excel_company_id = None
-                    match = re.search(r'\((\d+)\)$', excel_insurance) # Find digits in parentheses at the end
-                    if match:
-                        excel_company_id = match.group(1) # Get the number inside parentheses
+            # 4. Get Charges
+            tebra_charges = []; api_error_chg = None
+            proceed_to_charge_check = (current_result_data["Status"] != "Error" and tebra_patient_name_for_filter)
+            if proceed_to_charge_check:
+                cache_key_chg = (tebra_patient_name_for_filter, excel_dos_str)
+                tebra_charges, api_error_chg = tebra_charges_cache.get(cache_key_chg, ([], None))
+                if not tebra_charges and api_error_chg is None: tebra_charges, api_error_chg = get_tebra_charges_soap(client, header, tebra_patient_name_for_filter, excel_dos_dt); tebra_charges_cache[cache_key_chg] = (tebra_charges, api_error_chg)
 
-                    row_audit_details = { field: {'status': 'Pending', 'reason': ''} for field in ['policy', 'insurance', 'provider', 'icd', 'cpt'] }
-                    overall_status = 'Verified'; all_reasons_for_excel = []
-
-                    if not all([patient_name, dos]):
-                        overall_status = 'Skipped'; reason = "Missing Patient Name or DOS"; all_reasons_for_excel.append(reason)
-                        row_audit_details = {k: {'status': 'Skipped', 'reason': reason} for k in row_audit_details}
+            # 5. Process Charges & Compare
+            if proceed_to_charge_check:
+                if api_error_chg: mismatch_reasons.append(f"Charge Fetch Error: {api_error_chg}"); current_result_data["Status"] = "Error"
+                elif not tebra_charges: mismatch_reasons.append("No matching charge found in Tebra (None returned for name/DOS)"); current_result_data["Status"] = "Mismatch"
+                else:
+                    matching_tebra_charge, find_charge_reason = find_matching_charge(row, tebra_charges)
+                    if not matching_tebra_charge: mismatch_reasons.append(find_charge_reason); current_result_data["Status"] = "Mismatch"
                     else:
-                        # Get Tebra Data
-                        cache_key = (patient_name, practice_name, dos)
-                        if cache_key not in tebra_data_cache:
-                            tebra_codes, tebra_providers_charge = get_patient_codes_and_providers_from_charges(client, header, patient_name, practice_name, dos)
-                            tebra_patient_search_result = search_tebra_patient(client, header, practice_details, patient_name)
-                            tebra_patient_details = get_tebra_patient_details(client, header, tebra_patient_search_result['ID']) if tebra_patient_search_result else None
-                            tebra_data_cache[cache_key] = {'codes': tebra_codes or [], 'providers_charge': tebra_providers_charge or set(), 'details': tebra_patient_details}
+                        if current_result_data["Status"] == "Pending": current_result_data["Status"] = "Match";
+                        else: current_result_data["Status"] = "Mismatch"
+                        def check_field(excel_val, tebra_val, field_name, compare_func, identifier):
+                             if not compare_func(excel_val, tebra_val): mismatch_reasons.append(format_mismatch_reason(field_name, excel_val, tebra_val, identifier=identifier)); current_result_data["Status"] = "Mismatch"
+                        compare_normalized_str = lambda x, y: normalize_string(x) == normalize_string(y)
+                        compare_normalized_num_str = lambda x, y: normalize_code(str(x)) == normalize_code(str(y))
+                        check_field(row.get('claimID'), get_nested_attribute(matching_tebra_charge, 'ID'), "Claim ID", compare_normalized_num_str, identifier=excel_claim_id)
+                        check_field(row.get('EncounterID'), get_nested_attribute(matching_tebra_charge, 'EncounterID'), "Encounter ID", compare_normalized_num_str, identifier=excel_claim_id)
+                        check_field(row.get('RenderingProvider'), get_nested_attribute(matching_tebra_charge, 'RenderingProviderName'), "Rendering Provider", compare_providers, identifier=excel_claim_id)
+                        excel_ref_provider = row.get('ReferringProvider'); tebra_ref_provider = get_nested_attribute(matching_tebra_charge, 'ReferringProviderName')
+                        if excel_ref_provider and not pd.isna(excel_ref_provider): check_field(excel_ref_provider, tebra_ref_provider, "Referring Provider", compare_providers, identifier=excel_claim_id)
+                        elif tebra_ref_provider: mismatch_reasons.append(format_mismatch_reason("Referring Provider", excel_ref_provider, tebra_ref_provider, identifier=excel_claim_id)); current_result_data["Status"] = "Mismatch"
+                        check_field(row.get('ServiceLocationName'), get_nested_attribute(matching_tebra_charge, 'ServiceLocationName'), "Service Location", compare_normalized_str, identifier=excel_claim_id)
+                        if not compare_pos_codes(row.get('PlaceOfServiceCode'), get_nested_attribute(matching_tebra_charge, 'ServiceLocationPlaceOfServiceCode')): mismatch_reasons.append(format_mismatch_reason("PlaceOfService Code", row.get('PlaceOfServiceCode'), get_nested_attribute(matching_tebra_charge, 'ServiceLocationPlaceOfServiceCode'), identifier=excel_claim_id)); current_result_data["Status"] = "Mismatch"
+                        try:
+                             excel_units_str = str(row.get('ServiceUnitCount', '0')).strip(); excel_units = Decimal(excel_units_str) if excel_units_str else Decimal(0)
+                             tebra_units_str = str(get_nested_attribute(matching_tebra_charge, 'Units', '0')).strip(); tebra_units = Decimal(tebra_units_str) if tebra_units_str else Decimal(0)
+                             if excel_units != tebra_units: mismatch_reasons.append(format_mismatch_reason("Service Units", excel_units_str, tebra_units_str, identifier=excel_claim_id)); current_result_data["Status"] = "Mismatch"
+                        except (TypeError, ValueError, decimal.InvalidOperation) as unit_err: mismatch_reasons.append(f"Unit Comparison Error for Claim ID {excel_claim_id}: {unit_err}"); current_result_data["Status"] = "Mismatch"
+                        check_field(row.get('PriIns_CompanyName'), get_nested_attribute(matching_tebra_charge, 'PrimaryInsuranceCompanyName'), "Primary Ins Company", compare_normalized_str, identifier=excel_claim_id)
+                        # Positional Modifier Check
+                        for i in range(1, 5):
+                            excel_mod_raw = row.get(f'ProcedureModifier{i}'); tebra_mod_raw = get_nested_attribute(matching_tebra_charge, f'ProcedureModifier{i}'); excel_mod_norm = normalize_code(excel_mod_raw); tebra_mod_norm = normalize_code(tebra_mod_raw); is_excel_empty = not excel_mod_norm; is_tebra_empty = not tebra_mod_norm
+                            if is_excel_empty and is_tebra_empty: continue
+                            if is_excel_empty != is_tebra_empty or excel_mod_norm != tebra_mod_norm: mismatch_reasons.append(format_mismatch_reason(f"Modifier {i}", excel_mod_raw, tebra_mod_raw, identifier=excel_claim_id)); current_result_data["Status"] = "Mismatch"
+                        # Positional ICD Check
+                        for i in range(1, 5):
+                            excel_icd_raw = row.get(f'EncounterDiagnosisID{i}'); tebra_icd_raw = get_nested_attribute(matching_tebra_charge, f'EncounterDiagnosisID{i}'); excel_icd_norm = normalize_code(excel_icd_raw); tebra_icd_norm = normalize_code(tebra_icd_raw); is_excel_empty = not excel_icd_norm; is_tebra_empty = not tebra_icd_norm
+                            if is_excel_empty and is_tebra_empty: continue
+                            if is_excel_empty != is_tebra_empty or excel_icd_norm != tebra_icd_norm: mismatch_reasons.append(format_mismatch_reason(f"ICD {i}", excel_icd_raw, tebra_icd_raw, identifier=excel_claim_id)); current_result_data["Status"] = "Mismatch"
 
-                        cached_data = tebra_data_cache[cache_key]
-                        tebra_icds = {c['code'] for c in cached_data['codes'] if c['type'] == 'ICD' and c['code']}
-                        tebra_cpts = {c['code'] for c in cached_data['codes'] if c['type'] == 'CPT' and c['code']}
-                        tebra_providers = set(cached_data['providers_charge'])
-                        tebra_details = cached_data['details']
-                        if tebra_details and tebra_details.get('PrimaryProvider'):
-                             primary_provider = tebra_details['PrimaryProvider']
-                             if isinstance(primary_provider, dict) and primary_provider.get('FullName'): tebra_providers.add(primary_provider['FullName'].strip())
-                             elif isinstance(primary_provider, str): tebra_providers.add(primary_provider.strip())
+            # --- 6. Finalize Reason ---
+            if current_result_data["Status"] == "Match": current_result_data["Reason"] = "Verified"
+            elif mismatch_reasons: current_result_data["Reason"] = "; ".join(mismatch_reasons)
+            elif current_result_data["Status"] == "Error" and current_result_data["Reason"] == "Processing started": current_result_data["Reason"] = "Unknown processing error occurred." # Update default reason if needed
 
-                        no_tebra_data = not tebra_details and not tebra_icds and not tebra_cpts and not tebra_providers
-                        if no_tebra_data:
-                             overall_status = 'Invalid'; reason = "Patient/Charge data not found in Tebra"; all_reasons_for_excel.append(reason)
-                             row_audit_details = {k: {'status': 'Invalid', 'reason': reason} for k in row_audit_details}
-                        else:
-                            # --- Perform Audits and Populate Detailed Results ---
-                            try:
-                                # 1. Gather Tebra Policy Numbers and Company IDs
-                                tebra_policy_nums_found = set()
-                                tebra_company_ids_found = set()
-                                if tebra_details and tebra_details.get('Cases') and tebra_details['Cases'].get('PatientCaseData'):
-                                    cases_data = tebra_details['Cases']['PatientCaseData']; cases_data = [cases_data] if not isinstance(cases_data, list) else cases_data
-                                    for case in cases_data:
-                                        if case and case.get('InsurancePolicies') and case['InsurancePolicies'].get('PatientInsurancePolicyData'):
-                                            policies_data = case['InsurancePolicies']['PatientInsurancePolicyData']; policies_data = [policies_data] if not isinstance(policies_data, list) else policies_data
-                                            for p_data in policies_data:
-                                                p_dict = zeep.helpers.serialize_object(p_data, dict) if p_data else {}
-                                                num = str(p_dict.get('Number', '')).strip()
-                                                comp_id = str(p_dict.get('CompanyID', '')).strip() # Get CompanyID
-                                                if num: tebra_policy_nums_found.add(num)
-                                                if comp_id: tebra_company_ids_found.add(comp_id) # Store CompanyID
+            audit_results_list.append(current_result_data)
+            # Don't print per-row results to UI
 
-                                # 2. *** NEW Insurance Name Check (using Company ID) ***
-                                if excel_company_id:
-                                    if excel_company_id in tebra_company_ids_found:
-                                        row_audit_details['insurance']['status'] = 'Verified'
-                                    else:
-                                        overall_status = 'Invalid'
-                                        reason = f"Excel Company ID: {excel_company_id}; Tebra Company IDs Found: {', '.join(sorted(list(tebra_company_ids_found))) or 'None'}"
-                                        row_audit_details['insurance']['status'] = 'Invalid'
-                                        row_audit_details['insurance']['reason'] = reason
-                                        all_reasons_for_excel.append(f"Ins Company ID Mismatch ({excel_company_id})")
-                                else:
-                                    # Handle case where ID couldn't be parsed from Excel
-                                    overall_status = 'Invalid'
-                                    reason = f"Could not parse Company ID from Excel entry: '{excel_insurance}'"
-                                    row_audit_details['insurance']['status'] = 'Invalid'
-                                    row_audit_details['insurance']['reason'] = reason
-                                    all_reasons_for_excel.append("Ins Name Format Error (No ID)")
+        # --- End of Loop ---
+        end_time = time.time()
+        status_text.text(f"Audit Completed in {end_time - start_time:.2f} seconds.")
+        progress_bar.progress(1.0) # Ensure bar is full
 
-                                # 3. *** Policy Number Check (Independent) ***
-                                if policy_num: # Only check if excel has a policy number
-                                    if policy_num in tebra_policy_nums_found:
-                                        row_audit_details['policy']['status'] = 'Verified'
-                                    else:
-                                        overall_status = 'Invalid'
-                                        reason = f"Excel Policy: {policy_num}; Tebra Policies Found: {', '.join(sorted(list(tebra_policy_nums_found))) or 'None'}"
-                                        row_audit_details['policy']['status'] = 'Invalid'
-                                        row_audit_details['policy']['reason'] = reason
-                                        all_reasons_for_excel.append(f"Policy# Mismatch ({policy_num})")
-                                else:
-                                    row_audit_details['policy']['status'] = 'Verified' # No policy number provided in Excel to check
+        # --- 7. Post-Processing & Display ---
+        if not audit_results_list: st.warning("No results were generated.")
+        else:
+            df_detailed_results = pd.DataFrame(audit_results_list); df_output = df.copy()
+            status_map = {"Match": "Verified", "Mismatch": "Invalid", "Error": "Invalid", "Pending": "Invalid"}
+            # Use original index if available for alignment, otherwise assume order is preserved
+            df_output['Audit Results'] = df_detailed_results['Status'].map(status_map).fillna("Invalid").values
+            df_output['Reason for Invalid'] = df_detailed_results.apply(lambda x: x['Reason'] if x['Status'] != "Match" else "", axis=1).values
 
-                                # 4. Provider Check
-                                provider_match = False; excel_provider_norm = normalize_string(excel_provider)
-                                if excel_provider_norm:
-                                    if excel_provider_norm in {normalize_string(p) for p in tebra_providers}: provider_match = True
-                                    else:
-                                        for tebra_prov in tebra_providers:
-                                            if compare_providers(tebra_prov, excel_provider): provider_match = True; break
-                                if not provider_match and excel_provider:
-                                    overall_status = 'Invalid'; all_reasons_for_excel.append("Provider Mismatch")
-                                    tebra_providers_str = ", ".join(sorted(list(tebra_providers))) or "None"
-                                    row_audit_details['provider']['status'] = 'Invalid'
-                                    row_audit_details['provider']['reason'] = f"Excel: '{excel_provider}'; Tebra Providers Found: {tebra_providers_str}"
-                                else: row_audit_details['provider']['status'] = 'Verified'
+            st.subheader("Audit Summary")
+            summary_df = df_output["Audit Results"].value_counts().reset_index(); summary_df.columns = ['Audit Results', 'Count']
+            st.dataframe(summary_df, hide_index=True)
 
-                                # 5. ICD Check
-                                excel_icds_norm = set(validate_codes(split_codes(combined_excel_icd), 'ICD'))
-                                missing_icds = excel_icds_norm - tebra_icds
-                                if missing_icds:
-                                    overall_status = 'Invalid'; codes_str = ', '.join(sorted(list(missing_icds)))
-                                    all_reasons_for_excel.append(f"Invalid ICD(s): {codes_str}")
-                                    row_audit_details['icd']['status'] = 'Invalid'
-                                    excel_icd_str = ', '.join(sorted(list(excel_icds_norm))) or "None"; tebra_icd_str = ', '.join(sorted(list(tebra_icds))) or "None"
-                                    row_audit_details['icd']['reason'] = f"Excel code(s) missing in Tebra: {codes_str}. (Excel had: {excel_icd_str}; Tebra had: {tebra_icd_str})"
-                                else: row_audit_details['icd']['status'] = 'Verified'
+            st.subheader("Invalid Records Summary")
+            invalid_df = df_output[df_output["Audit Results"] == "Invalid"].copy()
+            if not invalid_df.empty:
+                 display_cols_summary = ['Excel Row', 'Audit Results', 'PatientID', 'DateOfService', 'ProcedureCode', 'Reason for Invalid']
+                 # Add Excel Row number using index + 2 from original df if 'Original Excel Row Index' exists
+                 if 'Original Excel Row Index' in invalid_df.columns: invalid_df.insert(0, 'Excel Row', invalid_df['Original Excel Row Index'] + 2)
+                 else: invalid_df.insert(0, 'Excel Row', invalid_df.index + 2) # Fallback to current index
+                 # Ensure all columns exist before trying to display
+                 display_cols_summary = [col for col in display_cols_summary if col in invalid_df.columns]
+                 st.dataframe(invalid_df[display_cols_summary], hide_index=True, use_container_width=True) # Use container width for better display
+            else: st.success("✅ No invalid records found!")
 
-                                # 6. CPT Check
-                                excel_cpts_norm = set(validate_codes(split_codes(excel_cpt_raw), 'CPT'))
-                                missing_cpts = excel_cpts_norm - tebra_cpts
-                                if missing_cpts:
-                                    overall_status = 'Invalid'; codes_str = ', '.join(sorted(list(missing_cpts)))
-                                    all_reasons_for_excel.append(f"Invalid CPT(s): {codes_str}")
-                                    row_audit_details['cpt']['status'] = 'Invalid'
-                                    excel_cpt_str = ', '.join(sorted(list(excel_cpts_norm))) or "None"; tebra_cpt_str = ', '.join(sorted(list(tebra_cpts))) or "None"
-                                    row_audit_details['cpt']['reason'] = f"Excel code(s) missing in Tebra: {codes_str}. (Excel had: {excel_cpt_str}; Tebra had: {tebra_cpt_str})"
-                                else: row_audit_details['cpt']['status'] = 'Verified'
+            st.subheader("Download Full Results")
+            @st.cache_data
+            def to_excel(df_to_convert):
+                output = io.BytesIO();
+                with pd.ExcelWriter(output, engine='openpyxl') as writer: df_to_convert.to_excel(writer, index=False, sheet_name='Audit Results');
+                return output.getvalue()
+            excel_bytes = to_excel(df_output)
+            timestamp = datetime.datetime.now().strftime('%Y%m%d_%H%M%S')
+            st.download_button(label="📥 Download Results as Excel", data=excel_bytes, file_name=f"Tebra_Audit_Results_{timestamp}.xlsx", mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
 
-                            except Exception as e_audit:
-                                st.error(f"🚨 Error during audit logic for row {idx+1}: {e_audit}")
-                                overall_status = 'Error'; reason = f"System error: {str(e_audit)}"
-                                all_reasons_for_excel.append(reason)
-                                row_audit_details = {k: {'status': 'Error', 'reason': reason} for k in row_audit_details}
-
-                    # --- Format and Store Results for UI ---
-                    audit_df.loc[idx, 'Audit Results'] = overall_status
-                    audit_df.loc[idx, 'Reason For Invalid'] = format_audit_reasons(all_reasons_for_excel)
-
-                    result_text = f"Patient Name: {patient_name} | Claim ID: {claim_id or 'N/A'} | DOS: {dos}\n"
-                    result_text += "AUDIT RESULT:\n"
-                    def format_detail_line(number, field_name, details):
-                        padded_name = field_name.ljust(22); line = f"{number}. {padded_name}: {details['status']}"
-                        if details['status'] not in ['Verified', 'Pending'] and details['reason']: line += f" (Reason: {details['reason']})"
-                        return line + "\n"
-                    # Use the row_audit_details populated by the new logic
-                    result_text += format_detail_line(1, 'Patient Policy Number', row_audit_details['policy'])
-                    result_text += format_detail_line(2, 'Insurance Name', row_audit_details['insurance']) # Status now based on CompanyID match
-                    result_text += format_detail_line(3, 'Provider Name', row_audit_details['provider'])
-                    result_text += format_detail_line(4, 'ICD-10 Code(s)', row_audit_details['icd'])
-                    result_text += format_detail_line(5, 'CPT Code(s)', row_audit_details['cpt'])
-
-                    audit_results_detailed_text.append(result_text + "-"*40)
-
-                # --- End of Loop ---
-                progress_bar.empty(); st.success("✅ Audit Complete!")
-                st.subheader("📊 Audit Results Detail")
-                st.text_area("Detailed Audit Log (per patient)", "".join(audit_results_detailed_text), height=500)
-                st.subheader("⬇️ Download Results Summary")
-                output = io.BytesIO()
-                with pd.ExcelWriter(output, engine='xlsxwriter') as writer: audit_df.to_excel(writer, index=False, sheet_name='AuditResults')
-                output.seek(0)
-                st.download_button(label="Download Audited Excel File", data=output, file_name="tebra_audit_results.xlsx", mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet")
-
-            else: st.error("❌ Could not build Tebra request header.")
-        else: st.error("❌ Could not connect to Tebra API.")
 else:
-    st.info("ℹ️ Enter Tebra credentials and upload your file, then click 'Run Audit'.")
-
-# -----------------------------------------------------------------------------
-# How to Run
-# -----------------------------------------------------------------------------
+    # Show instructions if button not pressed or file not uploaded
+    if not uploaded_file: st.info("Please upload an Excel file using the sidebar.")
+    if not all([practice_name, customer_key, username, password]): st.info("Please enter Tebra credentials in the sidebar.")
+    if uploaded_file and all([practice_name, customer_key, username, password]) and not run_button: st.info("Click 'Run Audit' to begin.")
