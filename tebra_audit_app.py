@@ -224,7 +224,7 @@ def find_matching_charge(excel_row_data, tebra_charges_list):
 # -----------------------------------------------------------------------------
 
 st.set_page_config(layout="wide")
-st.title("Tebra Audit Automation Tool")
+st.title("🩺 Tebra Charge Audit Tool - By Panacea Smart Solutions")
 st.markdown("Upload your Excel audit file and enter Tebra credentials to run the audit.")
 
 # --- Input Area ---
