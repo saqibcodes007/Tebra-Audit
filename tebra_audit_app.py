@@ -223,7 +223,12 @@ def find_matching_charge(excel_row_data, tebra_charges_list):
 # Streamlit App Main Section
 # -----------------------------------------------------------------------------
 
-st.set_page_config(layout="wide")
+st.set_page_config(
+    page_title="Tebra Charge Audit",
+    page_icon="🔍",
+    layout="wide"
+)
+
 st.title("🩺 Tebra Charge Audit Tool - By Panacea Smart Solutions")
 st.markdown("Upload your Excel audit file and enter Tebra credentials to run the audit.")
 
